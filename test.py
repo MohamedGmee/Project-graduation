@@ -22,10 +22,10 @@ def load_yolo_model(model_path):
 
 # Model paths and loading
 model_paths = {
-    "Hieroglyph": "Keywords.pt",
-    "Attractions": "Egypt_Attractions.pt",
-    "Landmarks": "Landmark_Object_detection.pt",
-    "Hieroglyph Net": "best_tourguide.pt"
+    "Hieroglyph": "https://github.com/MohamedGmee/Project-graduation/blob/main/Keywords.pt",
+    "Attractions": "https://github.com/MohamedGmee/Project-graduation/blob/main/Egypt%20Attractions.pt",
+    "Landmarks": "https://github.com/MohamedGmee/Project-graduation/blob/main/Landmark%20Object%20detection.pt",
+    "Hieroglyph Net": "https://github.com/MohamedGmee/Project-graduation/blob/main/best_tourgiude.pt"
 }
 
 models = {name: load_yolo_model(path) for name, path in model_paths.items()}
