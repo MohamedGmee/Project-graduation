@@ -1,73 +1,90 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Dec 23 00:41:57 2024
-
-@author: Amany
-"""
-
-import streamlit as st
-import cv2
-import numpy as np
-from PIL import Image
-import torch
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from ultralytics import YOLO
+from PIL import Image, ImageDraw
 import os
+import tempfile
+from io import BytesIO
+import base64
+from typing import List
 
-# Load Models
-@st.cache_resource
-def load_model(model_path):
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model file not found at: {model_path}")
+app = FastAPI()
 
-    try:
-        # Load the YOLO model (update repository as needed)
-        model = torch.hub.load('ultralytics/yolov8', 'custom', path=model_path, force_reload=True)
-    except Exception as e:
-        raise RuntimeError(f"Error loading the model: {e}")
+MODEL_DIR = "models" 
 
-    model.eval()  # Set the model to evaluation mode
-    return model
-
-models = {
-    "Hieroglyph": "https://github.com/MohamedGmee/Project-graduation/blob/main/Keywords.pt",
-    "Attractions": "https://github.com/MohamedGmee/Project-graduation/blob/main/Egypt%20Attractions.pt",
-    "Landmarks": "https://github.com/MohamedGmee/Project-graduation/blob/main/Landmark%20Object%20detection.pt",
-    "Hieroglyph Net": "https://github.com/MohamedGmee/Project-graduation/blob/main/best_tourgiude.pt"
+model_paths = {
+    "Hieroglyph": os.path.join(MODEL_DIR, "https://github.com/MohamedGmee/Project-graduation/blob/main/Keywords.pt"),
+    "Attractions": os.path.join(MODEL_DIR,  "https://github.com/MohamedGmee/Project-graduation/blob/main/Egypt%20Attractions.pt"),
+    "Landmarks": os.path.join(MODEL_DIR, "https://github.com/MohamedGmee/Project-graduation/blob/main/Landmark%20Object%20detection.pt"),
+    "Hieroglyph Net": os.path.join(MODEL_DIR, "https://github.com/MohamedGmee/Project-graduation/blob/main/best_tourgiude.pt"),
 }
+def load_yolo_model(model_path):
+    if not os.path.exists(model_path):
+        print(f"❌ Model path not found: {model_path}")
+        return None
+    try:
+        return YOLO(model_path)
+    except Exception as e:
+        print(f"❌ Error loading model {model_path}: {e}")
+        return None
 
-# Streamlit UI
-st.title("Image Classification and Detection")
-uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
+models = {name: load_yolo_model(path) for name, path in model_paths.items()}
 
-if uploaded_file is not None:
-    # Load the image
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Image", use_column_width=True)
+@app.get("/")
+def home():
+    return {"message": "FastAPI Server is running! Use /docs to test the API."}
 
-    # Convert to OpenCV format
-    image_np = np.array(image)
-    image_cv = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
-
-    # Initialize results array
+def run_inference(model, image, draw, processed_classes):
+    results = model.predict(source=image, save=False)
     detected_classes = []
 
-    # Process the image with all models
-    for model_name, model in models.items():
-        st.write(f"Processing with {model_name}...")
+    for result in results:
+        if hasattr(result, 'boxes') and result.boxes is not None:
+            for box in result.boxes:
+                if hasattr(box, 'cls') and hasattr(box, 'xyxy'):
+                    cls_id = int(box.cls)
+                    cls_name = model.names.get(cls_id, f"Class_{cls_id}") if model.names else f"Class_{cls_id}"
+                    if cls_name not in processed_classes:
+                        detected_classes.append(cls_name)
+                        processed_classes.add(cls_name)
+                        x1, y1, x2, y2 = map(int, box.xyxy.tolist()[0])
+                        draw.rectangle([x1, y1, x2, y2], outline="blue", width=2)
+                        draw.text((x1, y1 - 10), cls_name, fill="white")
+
+    return detected_classes
+
+@app.post("/upload/")
+async def upload(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith((".png", ".jpg", ".jpeg")):
+        raise HTTPException(status_code=400, detail="Invalid file format. Only images are allowed.")
+
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".jpg") as temp_file:
+        temp_file.write(await file.read())
+        temp_file.flush()
+        image_path = temp_file.name
+
         try:
-            # Perform inference
-            results = model(image_cv)  # Use the model's predict method
+            original_image = Image.open(image_path).convert("RGB")
+            draw = ImageDraw.Draw(original_image)
+            processed_classes = set()
+            all_results = []
 
-            for result in results.xyxy[0].cpu().numpy():
-                x1, y1, x2, y2, conf, cls = result
-                class_name = results.names[int(cls)]
-                detected_classes.append(class_name)
+            for name, model in models.items():
+                if model:
+                    all_results.extend(run_inference(model, original_image, draw, processed_classes))
 
-                # Draw bounding box and label
-                cv2.rectangle(image_cv, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-                cv2.putText(image_cv, class_name, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            # ✅ تحسين الصورة وتحويلها إلى Base64
+            original_image.thumbnail((500, 500))  # تحديد حجم مناسب
+            img_byte_arr = BytesIO()
+            original_image.save(img_byte_arr, format="WebP", quality=80)
+            img_byte_arr.seek(0)
+
+            img_base64 = base64.b64encode(img_byte_arr.read()).decode('utf-8')
+
+            return {
+                "detected_classes": list(set(all_results)),
+                "annotated_image_base64": img_base64
+            }
+
         except Exception as e:
-            st.error(f"Error processing with {model_name}: {e}")
-
-    # Display results
-    st.image(cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB), caption="Detected Classes", use_column_width=True)
-    st.write("Detected Classes:", detected_classes)
+            print(f"❌ Error processing file: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
