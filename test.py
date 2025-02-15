@@ -1,13 +1,37 @@
 from flask import Flask, request, jsonify, render_template
 from ultralytics import YOLO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import os
 import tempfile
+import requests
 
 app = Flask(__name__)
 
+# دالة لتنزيل الملفات من GitHub
+def download_file(url, save_path):
+    response = requests.get(url)
+    if response.status_code == 200:
+        with open(save_path, 'wb') as f:
+            f.write(response.content)
+        print(f"File downloaded and saved to: {save_path}")
+    else:
+        print(f"Failed to download file from: {url}")
 
-# Load YOLO models
+# تنزيل النماذج من GitHub
+model_urls = {
+    "Hieroglyph": "https://github.com/MohamedGmee/Project-graduation/raw/main/Keywords.pt",
+    "Attractions": "https://github.com/MohamedGmee/Project-graduation/raw/main/Egypt%20Attractions.pt",
+    "Landmarks": "https://github.com/MohamedGmee/Project-graduation/raw/main/Landmark%20Object%20detection.pt",
+    "Hieroglyph Net": "https://github.com/MohamedGmee/Project-graduation/raw/main/best_tourgiude.pt"
+}
+
+model_paths = {}
+for name, url in model_urls.items():
+    save_path = f"{name}.pt"
+    download_file(url, save_path)
+    model_paths[name] = save_path
+
+# تحميل نماذج YOLO
 def load_yolo_model(model_path):
     try:
         model = YOLO(model_path)
@@ -17,17 +41,10 @@ def load_yolo_model(model_path):
         print(f"Error loading YOLO model from {model_path}: {e}")
         return None
 
-model_paths = {
-    "Hieroglyph": "https://github.com/MohamedGmee/Project-graduation/blob/main/Keywords.pt",
-    "Attractions": "https://github.com/MohamedGmee/Project-graduation/blob/main/Egypt%20Attractions.pt",
-    "Landmarks": "https://github.com/MohamedGmee/Project-graduation/blob/main/Landmark%20Object%20detection.pt",
-    "Hieroglyph Net": "https://github.com/MohamedGmee/Project-graduation/blob/main/best_tourgiude.pt"
-}
-
 models = {name: load_yolo_model(path) for name, path in model_paths.items()}
 
-# Inference function
-def run_inference(model, image, draw, font, processed_classes):
+# دالة الاستدلال
+def run_inference(model, image, draw, processed_classes):
     results = model.predict(source=image, save=False)
     detected_classes = []
 
@@ -42,7 +59,7 @@ def run_inference(model, image, draw, font, processed_classes):
                         processed_classes.add(cls_name)
                         x1, y1, x2, y2 = map(int, box.xyxy.tolist()[0])
                         draw.rectangle([x1, y1, x2, y2], outline="blue", width=2)
-                        draw.text((x1, y1 - 10), cls_name, fill="white", font=font)
+                        draw.text((x1, y1 - 10), cls_name, fill="white")  # تمت إزالة font=font
 
     return detected_classes
 
@@ -71,15 +88,15 @@ def upload():
 
         for name, model in models.items():
             if model:
-                all_results.extend(run_inference(model, original_image, draw, font, processed_classes))
+                all_results.extend(run_inference(model, original_image, draw, processed_classes))
 
         final_annotated_path = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
         original_image.save(final_annotated_path)
 
-        original_image.close()  # Ensure the image is closed before deletion
+        original_image.close()  # إغلاق الصورة
 
         try:
-            os.remove(image_path)  # Attempt to remove the temporary file
+            os.remove(image_path)  # حذف الملف المؤقت
         except PermissionError:
             print(f"Could not delete file: {image_path} because it is in use.")
 
